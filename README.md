@@ -243,5 +243,5 @@ trajectory_screen = trajectory * np.array([screen_width, screen_height])
 
 ## 作者
 
-AI Assistant
+https://github.com/arckalsun
 

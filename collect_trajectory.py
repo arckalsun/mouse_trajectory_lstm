@@ -139,6 +139,7 @@ class MouseTrajectoryCollector:
         
         # 当前轨迹数据
         self.current_trajectory = []
+        self.current_timestamps = []  # 保存每个点的时间戳
         self.last_point_time = None
         self.last_point = None
         
@@ -170,6 +171,7 @@ class MouseTrajectoryCollector:
         if self.last_point_time is None:
             # 第一个点，开始新轨迹
             self.current_trajectory = [current_point]
+            self.current_timestamps = [current_time]
             self.last_point_time = current_time
             self.last_point = current_point
             return
@@ -179,6 +181,7 @@ class MouseTrajectoryCollector:
             # 保存当前轨迹并开始新轨迹
             self._save_current_trajectory()
             self.current_trajectory = [current_point]
+            self.current_timestamps = [current_time]
             self.last_point_time = current_time
             self.last_point = current_point
             return
@@ -189,6 +192,7 @@ class MouseTrajectoryCollector:
         # 只记录移动距离足够的点（过滤微小抖动）
         if distance >= self.min_distance:
             self.current_trajectory.append(current_point)
+            self.current_timestamps.append(current_time)
             self.last_point_time = current_time
             self.last_point = current_point
             self.total_points += 1
@@ -204,8 +208,10 @@ class MouseTrajectoryCollector:
                 self._save_current_trajectory()
             
             # 开始新轨迹，以点击位置为起点
+            click_time = time.time()
             self.current_trajectory = [np.array([x, y], dtype=np.float32)]
-            self.last_point_time = time.time()
+            self.current_timestamps = [click_time]
+            self.last_point_time = click_time
             self.last_point = np.array([x, y], dtype=np.float32)
         else:
             # 鼠标释放时，如果当前有轨迹，保存它
@@ -237,16 +243,20 @@ class MouseTrajectoryCollector:
         start_point = trajectory_normalized[0]
         target_point = trajectory_normalized[-1]
         
-        # 计算到达目标点后的停留时间
-        # 停留时间 = 轨迹总时间（从第一个点到最后一个点的时间）
-        stay_time = 0.0
+        # 计算轨迹的平均时间间隔
         if len(self.current_timestamps) > 1:
-            stay_time = self.current_timestamps[-1] - self.current_timestamps[0]
+            time_diffs = np.diff(self.current_timestamps)
+            avg_time_interval = np.mean(time_diffs)
+            # 限制时间间隔在合理范围内（1ms到100ms）
+            avg_time_interval = max(0.001, min(0.1, avg_time_interval))
+        else:
+            # 如果没有时间戳，使用默认值
+            avg_time_interval = 0.01  # 默认10ms
         
         # 保存轨迹和目标点（目标点包含时间信息：[x, y, time]）
         self.all_trajectories.append(trajectory_normalized)
-        # 目标点扩展为3维：[x, y, stay_time]
-        target_with_time = np.array([target_point[0], target_point[1], stay_time], dtype=np.float32)
+        # 目标点扩展为3维：[x, y, avg_time_interval]
+        target_with_time = np.array([target_point[0], target_point[1], avg_time_interval], dtype=np.float32)
         self.all_targets.append(target_with_time)
         
         self.total_trajectories += 1
@@ -356,22 +366,7 @@ class MouseTrajectoryCollector:
             padded_trajectories.append(padded_traj)
         
         trajectories_array = np.array(padded_trajectories, dtype=np.float32)
-        
-        # 处理targets：确保所有targets都是3维（x, y, time）
-        processed_targets = []
-        for target in self.all_targets:
-            if len(target) == 3:
-                processed_targets.append(target)
-            elif len(target) == 2:
-                # 如果只有2维，添加默认时间0
-                processed_targets.append(np.array([target[0], target[1], 0.0], dtype=np.float32))
-            else:
-                # 兼容其他情况
-                processed_targets.append(np.array([target[0] if len(target) > 0 else 0.0, 
-                                                 target[1] if len(target) > 1 else 0.0, 
-                                                 0.0], dtype=np.float32))
-        
-        targets_array = np.array(processed_targets, dtype=np.float32)
+        targets_array = np.array(self.all_targets, dtype=np.float32)
         
         # 生成文件名（带时间戳）
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -466,11 +461,11 @@ def merge_collected_data(data_dir="collected_data", output_file="trajectories_me
     merged_trajectories = np.vstack(padded_all_trajectories)
     merged_targets = np.vstack(all_targets)
 
-    os.makedirs("merged", exist_ok=True)
+    os.makedirs("trained_data", exist_ok=True)
 
     # 保存合并后的数据
-    np.save("merged/trajectories.npy", merged_trajectories)
-    np.save("merged/targets.npy", merged_targets)
+    np.save("trained_data/trajectories.npy", merged_trajectories)
+    np.save("trained_data/targets.npy", merged_targets)
     
     print(f"\n合并完成:")
     print(f"  总轨迹数: {len(merged_trajectories)}")

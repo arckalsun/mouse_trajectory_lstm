@@ -95,7 +95,7 @@ def generate_training_data(num_samples=10000, screen_width=1920, screen_height=1
     Returns:
         tuple: (trajectories, targets) 
             trajectories: shape (num_samples, seq_len, 2) 的轨迹序列
-            targets: shape (num_samples, 2) 的目标点坐标
+            targets: shape (num_samples, 3) 的目标点坐标和时间间隔 [x, y, time]
     """
     trajectories = []
     targets = []
@@ -122,7 +122,15 @@ def generate_training_data(num_samples=10000, screen_width=1920, screen_height=1
         trajectory[:, 1] /= screen_height
         
         trajectories.append(trajectory)
-        targets.append([end_x / screen_width, end_y / screen_height])
+        
+        # 计算轨迹的平均时间间隔（模拟人类移动速度）
+        # 假设轨迹总时长在0.1秒到2秒之间，根据距离调整
+        distance = np.sqrt((end_x - start_x)**2 + (end_y - start_y)**2)
+        total_time = 0.1 + (distance / screen_width) * 1.5  # 根据距离估算总时间
+        avg_time_interval = total_time / num_points
+        
+        # 目标点包含坐标和时间间隔 [x, y, time]
+        targets.append([end_x / screen_width, end_y / screen_height, avg_time_interval])
         
         if (i + 1) % 1000 == 0:
             print(f"已生成 {i + 1}/{num_samples} 个样本")

@@ -11,13 +11,14 @@ plt.switch_backend('TkAgg')
 plt.rcParams["font.sans-serif"] = "SimHei"
 plt.rcParams["axes.unicode_minus"] = False
 
-def load_model(model_path='mouse_trajectory_model.pth', device='cpu'):
+def load_model(model_path='mouse_trajectory_model.pth', device='cpu', output_time=True):
     """
     加载训练好的模型
     
     Args:
         model_path: 模型文件路径
         device: 计算设备
+        output_time: 是否启用时间间隔输出
     
     Returns:
         加载的模型
@@ -26,7 +27,8 @@ def load_model(model_path='mouse_trajectory_model.pth', device='cpu'):
         input_size=2,
         hidden_size=128,
         num_layers=2,
-        dropout=0.2
+        dropout=0.2,
+        output_time=output_time  # 启用时间间隔输出
     )
     
     if os.path.exists(model_path):
@@ -44,7 +46,7 @@ def generate_trajectory_step_by_step(model, start_point, target_point,
                                     screen_width=1920, screen_height=1080,
                                     device='cpu', max_steps=200):
     """
-    逐步生成轨迹（更接近真实鼠标移动）
+    逐步生成轨迹（更接近真实鼠标移动，包含时间间隔）
     
     Args:
         model: 训练好的LSTM模型
@@ -54,7 +56,9 @@ def generate_trajectory_step_by_step(model, start_point, target_point,
         max_steps: 最大步数
     
     Returns:
-        生成的轨迹点数组（屏幕坐标）
+        tuple: (trajectory_screen, time_intervals)
+            trajectory_screen: 生成的轨迹点数组（屏幕坐标）(N, 2)
+            time_intervals: 时间间隔数组（秒）(N-1,)
     """
     model.eval()
     
@@ -68,6 +72,7 @@ def generate_trajectory_step_by_step(model, start_point, target_point,
     target_point = target_point.to(device)
     
     trajectory = [start_point.cpu().numpy()]
+    time_intervals = []
     current_point = start_point.unsqueeze(0).unsqueeze(0)  # (1, 1, 2)
     
     # 维护一个历史窗口（用于LSTM输入）
@@ -80,39 +85,31 @@ def generate_trajectory_step_by_step(model, start_point, target_point,
         for step in range(max_steps):
             # 准备输入序列（使用历史窗口）
             if len(history_window) > 1:
-                # 计算相对位移（更有利于模型学习）
+                # 使用历史窗口的坐标作为输入
                 history_array = np.array(history_window[-max_history:])
-                if len(history_array) > 1:
-                    # 使用相对位移作为输入
-                    displacements = np.diff(history_array, axis=0)
-                    # 如果只有一个点，添加零位移
-                    if len(displacements) == 0:
-                        displacements = np.array([[0.0, 0.0]])
-                else:
-                    displacements = np.array([[0.0, 0.0]])
+                input_seq = torch.FloatTensor(history_array).unsqueeze(0).to(device)  # (1, seq_len, 2)
             else:
-                displacements = np.array([[0.0, 0.0]])
+                input_seq = current_point  # (1, 1, 2)
             
-            # 转换为tensor
-            input_seq = torch.FloatTensor(displacements).unsqueeze(0).to(device)
+            # 预测下一个点和时间间隔
+            output, _ = model(input_seq)
             
-            # 预测下一个点的位移和时间间隔
-            next_pred, _ = model(input_seq)
-            
-            # 分离坐标和时间
-            if next_pred.shape[1] == 3:  # 包含时间信息
-                next_displacement = next_pred[:, :2]
-                time_delta = next_pred[:, 2:3].item()
+            # 分离坐标和时间间隔
+            if output.shape[1] == 3:
+                # 模型输出包含时间间隔
+                next_point_pred = output[:, :2].squeeze(0)  # (2,)
+                time_interval = output[:, 2].item()  # 标量
+                # 限制时间间隔在合理范围内（1ms到100ms）
+                time_interval = max(0.001, min(0.1, time_interval))
             else:
-                next_displacement = next_pred
-                time_delta = 0.0
+                # 旧版本模型，只输出坐标
+                next_point_pred = output.squeeze(0)  # (2,)
+                time_interval = 0.01  # 默认10ms
             
-            # 计算下一个点
-            last_point = torch.FloatTensor(history_window[-1]).to(device)
-            next_point = last_point + next_displacement.squeeze()
+            time_intervals.append(time_interval)
             
             # 添加朝向目标点的引导
-            direction_to_target = target_point - next_point
+            direction_to_target = target_point - next_point_pred
             distance_to_target = torch.norm(direction_to_target)
             
             # 根据距离调整引导强度
@@ -120,7 +117,9 @@ def generate_trajectory_step_by_step(model, start_point, target_point,
                 direction_to_target = direction_to_target / distance_to_target
                 # 距离越远，引导越强
                 guide_strength = min(0.3, distance_to_target.item() * 2)
-                next_point = next_point + guide_strength * direction_to_target * 0.01
+                next_point = next_point_pred + guide_strength * direction_to_target * 0.01
+            else:
+                next_point = next_point_pred
             
             # 添加小的随机扰动（模拟人类移动的不规则性）
             noise = torch.randn_like(next_point) * 0.005
@@ -151,8 +150,9 @@ def generate_trajectory_step_by_step(model, start_point, target_point,
     
     # 反归一化到屏幕坐标
     trajectory_screen = np.array(trajectory) * np.array([screen_width, screen_height])
+    time_intervals_array = np.array(time_intervals)
     
-    return trajectory_screen
+    return trajectory_screen, time_intervals_array
 
 
 def visualize_trajectory(trajectory, start_point, target_point, 
@@ -259,8 +259,8 @@ def main():
     for i, (start, target) in enumerate(test_cases):
         print(f"\n生成轨迹 {i+1}: 起点 {start} -> 终点 {target}")
         
-        # 生成轨迹
-        trajectory = generate_trajectory_step_by_step(
+        # 生成轨迹（包含时间间隔）
+        trajectory, time_intervals = generate_trajectory_step_by_step(
             model=model,
             start_point=np.array(start),
             target_point=np.array(target),
@@ -270,6 +270,8 @@ def main():
         )
         
         print(f"生成了 {len(trajectory)} 个轨迹点")
+        print(f"平均时间间隔: {np.mean(time_intervals)*1000:.2f} ms")
+        print(f"总时长: {np.sum(time_intervals)*1000:.2f} ms")
 
         os.makedirs("generate", exist_ok=True)
 
