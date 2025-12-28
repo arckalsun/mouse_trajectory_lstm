@@ -37,6 +37,10 @@ def load_collected_data(data_dir="collected_data", timestamp=None):
     
     Returns:
         tuple: (trajectories, targets, metadata)
+            trajectories: 轨迹数组 (num_trajectories, seq_len, 2)，归一化坐标
+            targets: 目标点数组 (num_trajectories, 2) 或 (num_trajectories, 3)
+                     2维格式: [x, y]，3维格式: [x, y, time_interval]
+            metadata: 元数据字典
     """
     if timestamp is None:
         # 查找最新的数据文件
@@ -60,6 +64,15 @@ def load_collected_data(data_dir="collected_data", timestamp=None):
     
     trajectories = np.load(trajectories_file)
     targets = np.load(targets_file)
+    
+    # 检查targets格式并打印信息
+    if len(targets.shape) == 2:
+        if targets.shape[1] == 3:
+            print(f"检测到3维targets格式 (包含时间间隔): shape {targets.shape}")
+        elif targets.shape[1] == 2:
+            print(f"检测到2维targets格式: shape {targets.shape}")
+        else:
+            print(f"警告: targets格式异常: shape {targets.shape}")
     
     # 加载元数据
     metadata = {}
@@ -155,7 +168,8 @@ def visualize_all_trajectories(trajectories, targets, metadata,
     
     Args:
         trajectories: 轨迹数组 (num_trajectories, seq_len, 2)，归一化坐标
-        targets: 目标点数组 (num_trajectories, 2)，归一化坐标
+        targets: 目标点数组 (num_trajectories, 2) 或 (num_trajectories, 3)
+                 2维格式: [x, y]，3维格式: [x, y, time_interval]，归一化坐标
         metadata: 元数据字典
         max_trajectories: 最多显示的轨迹数（None表示显示全部）
         save_path: 保存路径（可选）
@@ -192,7 +206,9 @@ def visualize_all_trajectories(trajectories, targets, metadata,
         traj_screen = clip_coordinates(traj_screen, screen_width, screen_height)
         
         start_screen = traj_screen[0]
-        target_screen = np.clip(targets[i] * np.array([screen_width, screen_height]), 
+        # 处理targets可能是2维或3维的情况（3维包含时间间隔）
+        target_coord = targets[i][:2] if len(targets[i]) >= 2 else targets[i]
+        target_screen = np.clip(target_coord * np.array([screen_width, screen_height]), 
                                [0, 0], [screen_width, screen_height])
         
         # 绘制轨迹
@@ -341,8 +357,9 @@ def visualize_trajectory_detail(trajectories, targets, metadata,
     详细可视化指定的轨迹
     
     Args:
-        trajectories: 轨迹数组
-        targets: 目标点数组
+        trajectories: 轨迹数组 (num_trajectories, seq_len, 2)，归一化坐标
+        targets: 目标点数组 (num_trajectories, 2) 或 (num_trajectories, 3)
+                 2维格式: [x, y]，3维格式: [x, y, time_interval]，归一化坐标
         metadata: 元数据字典
         trajectory_indices: 要显示的轨迹索引列表（None表示显示前几条）
         save_path: 保存路径（可选）
@@ -379,7 +396,9 @@ def visualize_trajectory_detail(trajectories, targets, metadata,
         traj_screen = clip_coordinates(traj_screen, screen_width, screen_height)
         
         start_screen = traj_screen[0]
-        target_screen = np.clip(targets[traj_idx] * np.array([screen_width, screen_height]),
+        # 处理targets可能是2维或3维的情况（3维包含时间间隔）
+        target_coord = targets[traj_idx][:2] if len(targets[traj_idx]) >= 2 else targets[traj_idx]
+        target_screen = np.clip(target_coord * np.array([screen_width, screen_height]),
                                [0, 0], [screen_width, screen_height])
         
         # 绘制轨迹线
@@ -549,7 +568,9 @@ def print_statistics(trajectories, targets, metadata):
         traj_screen = clip_coordinates(traj_screen, screen_width, screen_height)
         
         start_screen = traj_screen[0]
-        target_screen = np.clip(targets[i] * np.array([screen_width, screen_height]),
+        # 处理targets可能是2维或3维的情况（3维包含时间间隔）
+        target_coord = targets[i][:2] if len(targets[i]) >= 2 else targets[i]
+        target_screen = np.clip(target_coord * np.array([screen_width, screen_height]),
                                [0, 0], [screen_width, screen_height])
         
         # 计算实际移动距离
@@ -788,14 +809,15 @@ def main():
         
         # 打印统计信息
         print_statistics(trajectories, targets, metadata)
-        
+
+        os.makedirs("collected_trajectories", exist_ok=True)
         # 可视化
         if args.mode in ["all", "both"]:
             print("\n可视化所有轨迹...")
             visualize_all_trajectories(
                 trajectories, targets, metadata,
                 max_trajectories=args.max_trajectories,
-                save_path=args.save_all or "collected_trajectories_all.png"
+                save_path=args.save_all or "collected_trajectories/collected_trajectories_all.png"
             )
         
         if args.mode in ["detail", "both"]:
@@ -803,7 +825,7 @@ def main():
             visualize_trajectory_detail(
                 trajectories, targets, metadata,
                 trajectory_indices=args.trajectory_indices,
-                save_path=args.save_detail or "collected_trajectories_detail.png"
+                save_path=args.save_detail or "collected_trajectories/collected_trajectories_detail.png"
             )
         
         if args.mode == "velocity":
@@ -811,7 +833,7 @@ def main():
             visualize_velocity_profile(
                 trajectories, targets, metadata,
                 trajectory_indices=args.trajectory_indices,
-                save_path="velocity_profile.png"
+                save_path="collected_trajectories/velocity_profile.png"
             )
         
         if args.mode == "velocity-compare":
@@ -819,7 +841,7 @@ def main():
             visualize_velocity_comparison(
                 trajectories, targets, metadata,
                 trajectory_indices=args.trajectory_indices,
-                save_path="velocity_comparison.png"
+                save_path="collected_trajectories/velocity_comparison.png"
             )
         
         print("\n可视化完成！")

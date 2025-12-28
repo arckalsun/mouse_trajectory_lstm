@@ -11,7 +11,7 @@ import os
 def example_single_trajectory():
     """生成单个轨迹的示例"""
     # 检查模型是否存在
-    model_path = 'mouse_trajectory_model.pth'
+    model_path = 'model/mouse_trajectory_model.pth'
     if not os.path.exists(model_path):
         print("错误: 未找到模型文件，请先运行 train.py 训练模型")
         return
@@ -28,7 +28,7 @@ def example_single_trajectory():
     
     # 生成轨迹
     screen_width, screen_height = 2560, 1440
-    trajectory = generate_trajectory_step_by_step(
+    trajectory, time_intervals_array = generate_trajectory_step_by_step(
         model=model,
         start_point=start_point,
         target_point=target_point,

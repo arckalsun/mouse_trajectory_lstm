@@ -4,3 +4,4 @@ generate/
 trained_data/
 model/
 trained_data/
+collected_trajectories/

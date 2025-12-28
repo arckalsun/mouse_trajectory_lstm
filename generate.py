@@ -108,21 +108,38 @@ def generate_trajectory_step_by_step(model, start_point, target_point,
             
             time_intervals.append(time_interval)
             
-            # 添加朝向目标点的引导
-            direction_to_target = target_point - next_point_pred
+            # 获取当前点（归一化坐标）
+            current_point_norm = torch.FloatTensor(history_window[-1]).to(device)
+            
+            # 计算到目标点的方向和距离
+            direction_to_target = target_point - current_point_norm
             distance_to_target = torch.norm(direction_to_target)
             
-            # 根据距离调整引导强度
-            if distance_to_target > 0.01:
+            # 归一化方向向量
+            if distance_to_target > 1e-6:
                 direction_to_target = direction_to_target / distance_to_target
-                # 距离越远，引导越强
-                guide_strength = min(0.3, distance_to_target.item() * 2)
-                next_point = next_point_pred + guide_strength * direction_to_target * 0.01
             else:
-                next_point = next_point_pred
+                # 已经到达目标点
+                direction_to_target = torch.zeros_like(direction_to_target)
             
-            # 添加小的随机扰动（模拟人类移动的不规则性）
-            noise = torch.randn_like(next_point) * 0.005
+            # 混合模型预测和朝向目标的引导
+            # 引导强度：距离越远，引导越强；距离越近，引导越弱（更依赖模型预测）
+            if distance_to_target > 0.01:
+                # 动态调整引导强度：距离越远，引导越强（最大0.5）
+                guide_strength = min(0.5, 0.1 + distance_to_target.item() * 0.3)
+                # 计算引导步长：根据距离动态调整，但不超过合理范围
+                step_size = min(0.05, max(0.01, distance_to_target.item() * 0.1))
+                # 混合预测点和引导方向
+                guided_offset = guide_strength * direction_to_target * step_size
+                next_point = next_point_pred + guided_offset
+            else:
+                # 接近目标时，直接朝向目标点移动
+                step_size = min(0.02, distance_to_target.item())
+                next_point = current_point_norm + direction_to_target * step_size
+            
+            # 添加小的随机扰动（模拟人类移动的不规则性），但扰动要小
+            noise_scale = max(0.001, min(0.01, distance_to_target.item() * 0.02))
+            noise = torch.randn_like(next_point) * noise_scale
             next_point = next_point + noise
             
             # 限制在[0, 1]范围内
@@ -136,17 +153,42 @@ def generate_trajectory_step_by_step(model, start_point, target_point,
             if len(history_window) > max_history:
                 history_window.pop(0)
             
-            # 检查是否接近目标
-            distance = distance_to_target.item()
+            # 计算当前点到目标点的实际距离（用于停止判断）
+            current_to_target = target_point - next_point
+            distance = torch.norm(current_to_target).item()
             min_distance = min(min_distance, distance)
             
-            # 停止条件
-            if distance < 0.01:  # 归一化坐标下的阈值
+            # 停止条件：足够接近目标点
+            if distance < 0.005:  # 归一化坐标下的阈值（约5像素）
+                # 确保最后一个点就是目标点
+                trajectory.append(target_point.cpu().numpy())
                 break
             
-            # 如果距离不再减小，也停止
-            if step > 10 and distance > min_distance * 1.5:
-                break
+            # 如果距离不再减小且已经移动了足够步数，强制朝向目标点
+            if step > 20 and distance > min_distance * 1.2:
+                # 如果距离不再减小，直接朝向目标点移动
+                remaining_steps = max_steps - step - 1
+                if remaining_steps > 0:
+                    # 计算剩余步数内需要移动的距离
+                    step_to_target = current_to_target / (remaining_steps + 1)
+                    next_point = next_point + step_to_target
+                    # 继续生成，但强制朝向目标
+                else:
+                    # 最后一步，直接移动到目标点
+                    next_point = target_point
+                    trajectory.append(next_point.cpu().numpy())
+                    break
+    
+    # 检查最后一个点是否足够接近目标点，如果不是，添加目标点
+    if len(trajectory) > 0:
+        last_point = torch.FloatTensor(trajectory[-1]).to(device)
+        final_distance = torch.norm(target_point - last_point).item()
+        if final_distance > 0.01:  # 如果距离目标点超过1%（归一化坐标）
+            # 添加目标点作为最后一个点
+            trajectory.append(target_point.cpu().numpy())
+            # 如果时间间隔数量不够，添加一个默认值
+            if len(time_intervals) < len(trajectory) - 1:
+                time_intervals.append(0.01)
     
     # 反归一化到屏幕坐标
     trajectory_screen = np.array(trajectory) * np.array([screen_width, screen_height])
@@ -189,6 +231,8 @@ def visualize_trajectory(trajectory, start_point, target_point,
     plt.legend(fontsize=10)
     plt.grid(True, alpha=0.3)
     plt.axis('equal')
+    # 反转Y轴，使其与桌面坐标系一致（Y轴从上到下）
+    plt.gca().invert_yaxis()
 
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
